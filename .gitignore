@@ -1,0 +1,5 @@
+request_infos/*
+.vscode/*
+application/logs
+application/*.txt
+test/*.json
