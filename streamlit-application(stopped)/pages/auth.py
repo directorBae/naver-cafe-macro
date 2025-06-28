@@ -7,9 +7,17 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+import os
+from dotenv import load_dotenv
 
-# 환경 설정
-chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+# 환경 변수 로드
+load_dotenv()
+chrome_path = os.getenv("CHROME_PATH", r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+
+if not chrome_path or not os.path.exists(chrome_path):
+    st.error("Chrome 경로가 설정되지 않았거나 잘못되었습니다. .env 파일을 확인해주세요.")
+    st.stop()
+
 debug_port_start = 9222
 profile_base_dir = r"C:\Users\Public\chrome_profiles"
 creds_file = "naver_accounts.txt"
@@ -50,10 +58,21 @@ def initialize_browser(port, profile_path):
     )
     time.sleep(2)
 
-    # 셀레니움 연결
     options = Options()
     options.debugger_address = f"127.0.0.1:{port}"
-    driver = webdriver.Chrome(options=options)
+
+    if os.path.exists("./chromedriver/chromedriver"):
+        driver = webdriver.Chrome(
+            executable_path="./chromedriver/chromedriver",
+            options=options
+        )
+    else:
+        driver = webdriver.Chrome(
+            options=options
+        )
+
+    # 셀레니움 연결
+    
     return driver
 
 
