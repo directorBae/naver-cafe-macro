@@ -35,12 +35,32 @@ contextBridge.exposeInMainWorld("electronAPI", {
   loadAccountPosts: (userId) =>
     ipcRenderer.invoke("load-account-posts", userId),
 
+  // 계정별 템플릿 불러오기
+  loadAccountTemplates: (userId) =>
+    ipcRenderer.invoke("load-account-templates", userId),
+
   // OpenAI API 키 설정
   setOpenAIKey: (apiKey) => ipcRenderer.invoke("set-openai-key", apiKey),
 
   // 글 생성
   generatePosts: (prompt, count) =>
     ipcRenderer.invoke("generate-posts", prompt, count),
+
+  // 브라우저 세션에 쿠키 주입
+  injectCookies: (cookies) => ipcRenderer.invoke("inject-cookies", cookies),
+
+  // 네이버 카페 API 호출 (CORS 우회)
+  postToNaverCafe: (requestData) =>
+    ipcRenderer.invoke("post-to-naver-cafe", requestData),
+
+  // 템플릿 캡처 강제 활성화
+  activateTemplateCapture: () =>
+    ipcRenderer.invoke("activate-template-capture"),
+
+  // 템플릿 캡처 알림 수신 리스너
+  onTemplateCaptured: (callback) => {
+    ipcRenderer.on("template-captured", (event, data) => callback(data));
+  },
 
   // 리스너 제거 (메모리 누수 방지)
   removeAllListeners: (channel) => {

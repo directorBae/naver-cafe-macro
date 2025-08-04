@@ -6,7 +6,9 @@ const NavBar: React.FC = () => {
 
   const navItems = [
     { key: "login" as const, label: "로그인", icon: "🔐" },
+    { key: "cafes" as const, label: "카페목록관리", icon: "☕" },
     { key: "write" as const, label: "글쓰기", icon: "✍️" },
+    { key: "tasks" as const, label: "작업관리", icon: "📋" },
     { key: "settings" as const, label: "설정", icon: "⚙️" },
   ];
 

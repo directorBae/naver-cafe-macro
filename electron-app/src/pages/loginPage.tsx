@@ -60,11 +60,17 @@ const LoginPage: React.FC = () => {
       if (savedSlots && savedSlots.length > 0) {
         console.log("📋 저장된 슬롯 데이터 불러옴:", savedSlots);
 
+        // 슬롯 ID를 1-5 범위로 필터링
+        const validSlots = savedSlots.filter(
+          (slot: any) => slot.id >= 1 && slot.id <= 5
+        );
+        console.log("📋 유효한 슬롯 데이터 (1-5):", validSlots);
+
         // 저장된 슬롯 데이터를 React 상태에 적용
         setLoginSlots((prev) => {
           const updatedSlots = [...prev];
 
-          savedSlots.forEach((savedSlot: any) => {
+          validSlots.forEach((savedSlot: any) => {
             const slotIndex = updatedSlots.findIndex(
               (slot) => slot.id === savedSlot.id
             );

@@ -1,6 +1,8 @@
 {
-  "name": "electron-app",
-  "version": "0.1.0",
+  "name": "naver-cafe-macro",
+  "version": "1.0.0",
+  "description": "네이버 카페 자동화 매크로",
+  "homepage": "./",
   "private": true,
   "dependencies": {
     "@testing-library/dom": "^10.4.0",
@@ -22,20 +24,57 @@
   },
   "main": "public/electron.js",
   "scripts": {
-    "react-start": "react-scripts start",
-    "electron-start": "npx electron .",
-    "start": "npm run react-start && npm run electron-start",
+    "start": "react-scripts start",
     "build": "react-scripts build",
-    "eject": "react-scripts eject"
+    "test": "react-scripts test",
+    "eject": "react-scripts eject",
+    "electron": "electron .",
+    "electron-dev": "concurrently \"npm start\" \"wait-on http://localhost:3000 && electron .\"",
+    "build-electron": "npm run build && electron-builder",
+    "dist": "npm run build && electron-builder --publish=never",
+    "pack": "npm run build && electron-builder --dir",
+    "postinstall": "electron-builder install-app-deps"
   },
   "build": {
-    "appId": "com.example.myapp",
+    "appId": "com.naverbatchtools.navercafemacro",
+    "productName": "네이버 카페 매크로",
+    "directories": {
+      "output": "dist"
+    },
     "files": [
       "build/**/*",
-      "public/electron.js"
+      "public/electron.js",
+      "public/preload.js",
+      "node_modules/**/*",
+      "data/**/*",
+      ".env"
     ],
-    "directories": {
-      "buildResources": "assets"
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "public/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "네이버 카페 매크로"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "public/icon.icns"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "public/icon.png"
     }
   },
   "eslintConfig": {
@@ -62,6 +101,6 @@
     "electron": "^37.1.0",
     "electron-builder": "^26.0.12",
     "electron-reload": "^2.0.0-alpha.1",
-    "wait-on": "^8.0.3"
+    "wait-on": "^8.0.4"
   }
 }

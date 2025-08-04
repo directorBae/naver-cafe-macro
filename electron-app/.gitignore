@@ -4,6 +4,7 @@ node_modules/
 data/posts/*
 !data/posts/.gitkeep
 data/slots.json
+dist/
 
 .bin
 .pnp

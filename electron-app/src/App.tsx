@@ -2,7 +2,9 @@ import React from "react";
 import { useSessionStore } from "./store/sessionStore";
 import NavBar from "./components/navBar";
 import LoginPage from "./pages/loginPage";
+import CafesPage from "./pages/cafesPage";
 import WritePage from "./pages/writePage";
+import TasksPage from "./pages/tasksPage";
 import SettingsPage from "./pages/settingsPage";
 
 function App() {
@@ -13,8 +15,12 @@ function App() {
     switch (currentPage) {
       case "login":
         return <LoginPage />;
+      case "cafes":
+        return <CafesPage />;
       case "write":
         return <WritePage />;
+      case "tasks":
+        return <TasksPage />;
       case "settings":
         return <SettingsPage />;
       default:

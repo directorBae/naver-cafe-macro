@@ -10,17 +10,26 @@ dotenv.config();
 // OpenAI 클라이언트
 let openAIClient = null;
 
-require("electron-reload")(__dirname, {
-  electron: path.join(__dirname, "..", "node_modules", ".bin", "electron"),
-  forceHardReset: true,
-  hardResetMethod: "exit",
-});
+// 개발 환경에서만 electron-reload 사용
+const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
+
+if (isDev) {
+  require("electron-reload")(__dirname, {
+    electron: path.join(__dirname, "..", "node_modules", ".bin", "electron"),
+    forceHardReset: true,
+    hardResetMethod: "exit",
+  });
+}
 
 let mainWindow;
 let currentSlots = [];
 
-// 데이터 저장 경로
-const DATA_DIR = path.join(__dirname, "..", "data");
+// 데이터 저장 경로 (프로덕션 환경 고려)
+const DATA_DIR = isDev
+  ? path.join(__dirname, "..", "data")
+  : path.join(process.resourcesPath, "data");
+
+// ... 나머지 코드는 동일
 const SLOTS_FILE = path.join(DATA_DIR, "slots.json");
 const POSTS_DIR = path.join(DATA_DIR, "posts");
 
@@ -44,7 +53,12 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadURL("http://localhost:3000");
+  // 프로덕션에서는 빌드된 파일 로드
+  if (isDev) {
+    mainWindow.loadURL("http://localhost:3000");
+  } else {
+    mainWindow.loadFile(path.join(__dirname, "..", "build", "index.html"));
+  }
 }
 
 // ✅ IPC 핸들러: React가 요청하면 새 창을 띄움
@@ -267,12 +281,13 @@ ipcMain.handle("generate-posts", async (event, prompt, count = 1) => {
     사용자의 요청에 따라 카페에 올릴 수 있는 자연스럽고 유용한 글 내용을 생성해주세요.
 
     규칙:
-    1. 각 글은 50자 이내로 작성
+    1. 각 글은 200-500자 내외로 작성
     2. 자연스럽고 읽기 쉬운 내용
     3. 카페 분위기에 맞는 톤앤매너
-    4. 스팸성이나 광고성 내용 금지
-    5. 유용하고 가치 있는 정보 포함
-    6. 각 글은 서로 다른 내용이어야 함
+    4. 광고성 내용이어도 OK
+    5. 각 글은 최대한 중복을 피해야 함
+    6. 제목만 적을 것이며, "제목: ", "내용: " 과 같은 형식 템플릿은 사용하지 않음
+    7. 오로지 제목 텍스트만 제공할 것    
 
     응답 형식: 각 글을 새 줄로 구분하여 제공
 `;
@@ -286,7 +301,7 @@ ipcMain.handle("generate-posts", async (event, prompt, count = 1) => {
         { role: "user", content: userPrompt },
       ],
       temperature: 0.7,
-      max_tokens: 500,
+      max_tokens: 1000,
     });
 
     const response = completion.choices[0]?.message?.content;
@@ -313,6 +328,350 @@ ipcMain.handle("generate-posts", async (event, prompt, count = 1) => {
 ipcMain.handle("get-logged-in-slots", () => {
   return currentSlots.filter((slot) => slot.isLoggedIn);
 });
+
+// 🍪 브라우저 세션에 쿠키 주입
+ipcMain.handle("inject-cookies", async (event, cookies) => {
+  try {
+    console.log("🍪 쿠키 주입 시작...", Object.keys(cookies));
+
+    // 기본 세션에 쿠키 설정
+    for (const [name, value] of Object.entries(cookies)) {
+      await session.defaultSession.cookies.set({
+        url: "https://cafe.naver.com",
+        name,
+        value,
+        domain: ".naver.com",
+        path: "/",
+        secure: true,
+        httpOnly: false,
+        expirationDate: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30, // 30일 유효
+      });
+      console.log(`✅ 쿠키 설정: ${name} = ${value.substring(0, 20)}...`);
+    }
+
+    console.log("🍪 모든 쿠키 주입 완료");
+
+    // 쿠키 주입 후 임시등록 API 요청 가로채기 설정
+    setupTemplateCaptureListener();
+
+    return { success: true };
+  } catch (error) {
+    console.error("❌ 쿠키 주입 실패:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 🔄 템플릿 캡처 강제 활성화 (새 창 열기 전에 호출)
+ipcMain.handle("activate-template-capture", async (event) => {
+  try {
+    console.log("🎯 템플릿 캡처 강제 활성화...");
+
+    // 모든 세션에 강제로 리스너 설정
+    await setupTemplateCaptureListener();
+
+    // 기존에 열린 모든 윈도우에도 적용
+    const allWindows = BrowserWindow.getAllWindows();
+    console.log(`🪟 현재 열린 윈도우 개수: ${allWindows.length}`);
+
+    allWindows.forEach((win, index) => {
+      if (win.webContents.session) {
+        console.log(`🔗 윈도우 ${index + 1}의 세션에 리스너 설정 중...`);
+        setupListenerForSession(win.webContents.session, `윈도우-${index + 1}`);
+      }
+    });
+
+    return { success: true, message: "템플릿 캡처가 활성화되었습니다." };
+  } catch (error) {
+    console.error("❌ 템플릿 캡처 활성화 실패:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 🎯 개별 세션에 리스너 설정하는 헬퍼 함수
+function setupListenerForSession(sessionInstance, sessionName) {
+  const filter = {
+    urls: [
+      "*://*/temporary-articles*",
+      "*://*/temporary_articles*",
+      "*://apis.naver.com/*temporary-articles*",
+      "*://cafe.naver.com/*temporary-articles*",
+      "*://m.cafe.naver.com/*temporary-articles*",
+      "https://*/*temporary-articles*",
+      "http://*/*temporary-articles*",
+    ],
+  };
+
+  console.log(`📡 ${sessionName} 세션에 리스너 설정 중...`);
+  console.log(`📋 감지할 URL 패턴:`, filter.urls);
+
+  try {
+    sessionInstance.webRequest.onBeforeRequest(filter, (details, callback) => {
+      try {
+        // temporary-articles가 URL에 포함되어 있는지 추가 확인
+        const hasTemporaryArticles =
+          details.url.includes("temporary-articles") ||
+          details.url.includes("temporary_articles");
+
+        if (hasTemporaryArticles && details.method === "POST") {
+          console.log(`🚨 [${sessionName}] 임시등록 API 요청 감지됨!`);
+          console.log("  - 메서드:", details.method);
+          console.log("  - URL:", details.url);
+          console.log("  - 업로드 데이터 존재:", !!details.uploadData);
+
+          if (details.uploadData) {
+            console.log("✅ POST 요청이며 업로드 데이터가 있습니다!");
+            console.log("🎯 임시등록 API 요청 감지:", details.url);
+
+            // POST 데이터 추출
+            const postData = details.uploadData[0];
+            if (postData && postData.bytes) {
+              const requestBody = postData.bytes.toString("utf8");
+              console.log("📝 임시등록 요청 데이터 길이:", requestBody.length);
+              console.log(
+                "📝 요청 데이터 미리보기:",
+                requestBody.substring(0, 200) + "..."
+              );
+
+              // 사용자 ID 추출 (현재 로그인된 사용자)
+              const currentUserId = getCurrentUserId();
+              console.log("👤 현재 사용자 ID:", currentUserId);
+
+              if (currentUserId) {
+                console.log("💾 템플릿 데이터 저장 시작...");
+                const result = saveTemplateData(
+                  currentUserId,
+                  requestBody,
+                  details.url
+                );
+
+                if (result.success) {
+                  console.log("🎉 템플릿 캡처 및 저장 성공!");
+                } else {
+                  console.log("❌ 템플릿 저장 실패:", result.error);
+                }
+              } else {
+                console.log("⚠️ 현재 로그인된 사용자 ID를 찾을 수 없습니다.");
+                console.log(
+                  "📊 현재 슬롯 상태:",
+                  currentSlots.map((slot) => ({
+                    id: slot.id,
+                    userId: slot.userId,
+                    isLoggedIn: slot.isLoggedIn,
+                  }))
+                );
+              }
+            } else {
+              console.log("⚠️ POST 데이터를 추출할 수 없습니다.");
+            }
+          } else {
+            console.log("ℹ️ 업로드 데이터가 없습니다.");
+          }
+        } else if (hasTemporaryArticles) {
+          console.log(
+            `ℹ️ [${sessionName}] temporary-articles URL 감지되었지만 POST가 아님:`,
+            details.method,
+            details.url
+          );
+        }
+      } catch (error) {
+        console.error(`❌ [${sessionName}] 임시등록 데이터 캡처 오류:`, error);
+      }
+
+      callback({});
+    });
+
+    console.log(`✅ ${sessionName} 세션 리스너 설정 완료`);
+  } catch (error) {
+    console.error(`❌ ${sessionName} 세션 리스너 설정 실패:`, error);
+  }
+}
+
+// 📝 임시등록 API 요청 가로채기 설정
+function setupTemplateCaptureListener() {
+  console.log("🎯 템플릿 캡처 리스너 설정 시작...");
+
+  // 기본 세션에 리스너 설정
+  setupListenerForSession(session.defaultSession, "기본");
+
+  // 🔍 새로 생성되는 모든 세션에도 리스너 설정
+  const originalFromPartition = session.fromPartition;
+  session.fromPartition = function (partition, options) {
+    const newSession = originalFromPartition.call(this, partition, options);
+    console.log(`🆕 새 세션 생성됨: ${partition}`);
+
+    // 새 세션에도 템플릿 캡처 리스너 설정
+    setTimeout(() => {
+      setupListenerForSession(newSession, `새창-${partition}`);
+    }, 100);
+
+    return newSession;
+  };
+
+  console.log("✅ 임시등록 API 캡처 리스너 설정 완료");
+  console.log(
+    "🔍 이제 모든 창에서 임시등록 버튼을 누르면 자동으로 템플릿이 캡처됩니다!"
+  );
+}
+
+// 💾 템플릿 데이터 저장
+function saveTemplateData(userId, requestBody, url) {
+  try {
+    console.log("🎯 템플릿 데이터 저장 시작...");
+    console.log("  - 사용자 ID:", userId);
+    console.log("  - 요청 URL:", url);
+    console.log("  - 요청 데이터 크기:", requestBody.length, "bytes");
+
+    const userDir = path.join(POSTS_DIR, userId);
+    if (!fs.existsSync(userDir)) {
+      fs.mkdirSync(userDir, { recursive: true });
+      console.log("📁 사용자 디렉토리 생성:", userDir);
+    }
+
+    const templatesFile = path.join(userDir, "templates.json");
+
+    // 기존 템플릿 파일 로드
+    let templates = [];
+    if (fs.existsSync(templatesFile)) {
+      const data = fs.readFileSync(templatesFile, "utf8");
+      templates = JSON.parse(data);
+      console.log("📂 기존 템플릿", templates.length, "개 로드됨");
+    } else {
+      console.log("📄 새 템플릿 파일 생성 예정");
+    }
+
+    // 새 템플릿 데이터 추가
+    const newTemplate = {
+      id: `template_${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      url: url,
+      requestBody: requestBody,
+      userId: userId,
+    };
+
+    // URL에서 카페ID 추출 (더 유연한 패턴)
+    const cafeIdMatch =
+      url.match(/cafes?[/=](\d+)[/?&]?.*temporary[-_]articles/) ||
+      url.match(/cafe[/=](\d+)[/?&]?/) ||
+      url.match(/cafeId[=:](\d+)/) ||
+      url.match(/\/(\d+)\/.*temporary[-_]articles/);
+    if (cafeIdMatch) {
+      newTemplate.cafeId = cafeIdMatch[1];
+      console.log("🏠 카페 ID 추출:", newTemplate.cafeId);
+    } else {
+      console.log("⚠️ URL에서 카페 ID를 추출할 수 없음:", url);
+    }
+
+    // POST 데이터에서 추가 정보 추출 시도
+    try {
+      // URL 디코딩된 데이터에서 제목과 내용 추출 시도
+      const decodedBody = decodeURIComponent(requestBody);
+
+      // 제목 추출
+      const titleMatch = decodedBody.match(/subject=([^&]*)/);
+      if (titleMatch) {
+        newTemplate.title = titleMatch[1];
+        console.log(
+          "📝 제목 추출:",
+          newTemplate.title.substring(0, 50) + "..."
+        );
+      }
+
+      // 내용 추출
+      const contentMatch = decodedBody.match(/content=([^&]*)/);
+      if (contentMatch) {
+        newTemplate.content = contentMatch[1];
+        console.log(
+          "📄 내용 추출:",
+          newTemplate.content.substring(0, 100) + "..."
+        );
+      }
+
+      console.log("✅ 추가 정보 추출 완료");
+    } catch (extractError) {
+      console.log("⚠️ 추가 정보 추출 실패:", extractError.message);
+    }
+
+    templates.push(newTemplate);
+
+    // 파일에 저장
+    fs.writeFileSync(templatesFile, JSON.stringify(templates, null, 2));
+    console.log(`💾 템플릿 저장 완료: ${templatesFile}`);
+    console.log(`📊 총 템플릿 개수: ${templates.length}개`);
+
+    // React로 상세 알림 전송
+    if (mainWindow) {
+      mainWindow.webContents.send("template-captured", {
+        success: true,
+        userId: userId,
+        templateId: newTemplate.id,
+        cafeId: newTemplate.cafeId,
+        timestamp: newTemplate.timestamp,
+        title: newTemplate.title || "제목 없음",
+        totalTemplates: templates.length,
+        message: `임시등록 템플릿이 성공적으로 저장되었습니다! (${templates.length}번째)`,
+      });
+      console.log("📢 React로 성공 알림 전송 완료");
+    }
+
+    return { success: true, templateId: newTemplate.id };
+  } catch (error) {
+    console.error("❌ 템플릿 저장 오류:", error);
+
+    // React로 오류 알림 전송
+    if (mainWindow) {
+      mainWindow.webContents.send("template-captured", {
+        success: false,
+        error: error.message,
+        message: "템플릿 저장 중 오류가 발생했습니다.",
+      });
+    }
+
+    return { success: false, error: error.message };
+  }
+}
+
+// 🔍 현재 로그인된 사용자 ID 가져오기
+function getCurrentUserId() {
+  console.log("🔍 현재 로그인된 사용자 ID 검색 중...");
+  console.log("📊 전체 슬롯 개수:", currentSlots.length);
+
+  // 가장 최근에 로그인한 사용자 반환
+  const loggedInSlots = currentSlots.filter((slot) => slot.isLoggedIn);
+  console.log("✅ 로그인된 슬롯 개수:", loggedInSlots.length);
+
+  if (loggedInSlots.length > 0) {
+    console.log("📋 로그인된 슬롯 목록:");
+    loggedInSlots.forEach((slot, index) => {
+      console.log(
+        `  ${index + 1}. 슬롯 ${slot.id}: ${slot.userId} (${slot.timestamp})`
+      );
+    });
+
+    // 가장 최근 타임스탬프를 가진 슬롯의 사용자 ID 반환
+    const latestSlot = loggedInSlots.reduce((latest, current) => {
+      return new Date(current.timestamp) > new Date(latest.timestamp)
+        ? current
+        : latest;
+    });
+
+    console.log("🎯 가장 최근 로그인 사용자:", latestSlot.userId);
+    console.log("⏰ 로그인 시간:", latestSlot.timestamp);
+
+    return latestSlot.userId;
+  }
+
+  console.log("⚠️ 로그인된 사용자가 없습니다.");
+  console.log("📋 모든 슬롯 상태:");
+  currentSlots.forEach((slot, index) => {
+    console.log(
+      `  ${index + 1}. 슬롯 ${slot.id}: ${slot.userId || "미정"} - 로그인: ${
+        slot.isLoggedIn ? "O" : "X"
+      }`
+    );
+  });
+
+  return null;
+}
 
 // 🔄 슬롯 업데이트 (React에서 호출)
 ipcMain.handle("update-slot", (event, slotData) => {
@@ -384,6 +743,138 @@ ipcMain.handle("load-account-posts", (event, userId) => {
   } catch (error) {
     console.error("Error loading posts:", error);
     return [];
+  }
+});
+
+// 📖 계정별 템플릿 불러오기
+ipcMain.handle("load-account-templates", (event, userId) => {
+  try {
+    ensureDataDirectories();
+    const templatesFile = path.join(POSTS_DIR, userId, "templates.json");
+
+    if (!fs.existsSync(templatesFile)) {
+      return [];
+    }
+
+    const templatesData = fs.readFileSync(templatesFile, "utf8");
+    const templates = JSON.parse(templatesData);
+
+    // 배열로 반환 (templates가 배열이 아닌 경우 처리)
+    return Array.isArray(templates) ? templates : [];
+  } catch (error) {
+    console.error(`템플릿 로드 실패 (userId: ${userId}):`, error);
+    return [];
+  }
+});
+
+// 🌐 네이버 카페 API 호출 (CORS 우회)
+ipcMain.handle("post-to-naver-cafe", async (event, requestData) => {
+  const { url, body, cookies } = requestData;
+
+  console.log("🚀 Electron에서 네이버 카페 API 호출:", {
+    url,
+    bodyLength: JSON.stringify(body).length,
+    cookieCount: Object.keys(cookies).length,
+    hasNID_AUT: !!cookies["NID_AUT"],
+    hasNID_SES: !!cookies["NID_SES"],
+  });
+
+  try {
+    const https = require("https");
+    const { URL } = require("url");
+
+    // 쿠키 문자열 생성
+    const cookieString = Object.entries(cookies)
+      .map(([name, value]) => `${name}=${value}`)
+      .join("; ");
+
+    const urlObj = new URL(url);
+    const postData = JSON.stringify(body);
+
+    const options = {
+      hostname: urlObj.hostname,
+      port: 443,
+      path: urlObj.pathname + urlObj.search,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(postData),
+        Accept: "application/json, text/plain, */*",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+        Origin: "https://cafe.naver.com",
+        Referer: url.replace(
+          "apis.naver.com/cafe-web/cafe-editor-api/v2.0",
+          "cafe.naver.com/ca-fe"
+        ),
+        Cookie: cookieString,
+        "x-cafe-product": "pc",
+      },
+    };
+
+    console.log("📤 Electron API 요청 옵션:", {
+      hostname: options.hostname,
+      path: options.path,
+      cookieLength: cookieString.length,
+      cookiePreview: cookieString.substring(0, 200) + "...",
+      headers: Object.keys(options.headers),
+    });
+
+    return new Promise((resolve, reject) => {
+      const req = https.request(options, (res) => {
+        console.log("📥 Electron API 응답:", {
+          statusCode: res.statusCode,
+          statusMessage: res.statusMessage,
+          headers: res.headers,
+        });
+
+        let data = "";
+        res.on("data", (chunk) => {
+          data += chunk;
+        });
+
+        res.on("end", () => {
+          try {
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+              const result = JSON.parse(data);
+              console.log("✅ Electron API 성공:", result);
+              resolve({ success: true, data: result });
+            } else {
+              console.error("❌ Electron API 오류:", data);
+              resolve({
+                success: false,
+                error: `HTTP ${res.statusCode}: ${res.statusMessage}\n${data}`,
+              });
+            }
+          } catch (parseError) {
+            console.error("❌ JSON 파싱 오류:", parseError);
+            resolve({
+              success: false,
+              error: `응답 파싱 실패: ${parseError.message}\n응답 데이터: ${data}`,
+            });
+          }
+        });
+      });
+
+      req.on("error", (error) => {
+        console.error("❌ Electron 요청 오류:", error);
+        resolve({
+          success: false,
+          error: `요청 실패: ${error.message}`,
+          stack: error.stack,
+        });
+      });
+
+      req.write(postData);
+      req.end();
+    });
+  } catch (error) {
+    console.error("❌ Electron API 호출 실패:", error);
+    return {
+      success: false,
+      error: error.message,
+      stack: error.stack,
+    };
   }
 });
 

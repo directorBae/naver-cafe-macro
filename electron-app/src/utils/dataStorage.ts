@@ -1,41 +1,57 @@
-import fs from "fs";
-import path from "path";
+// 브라우저와 Electron 환경에서 모두 작동하는 데이터 저장 유틸리티
 
-// 데이터 저장 경로
-const DATA_DIR = path.join(process.cwd(), "data");
-const SLOTS_FILE = path.join(DATA_DIR, "slots.json");
-const POSTS_DIR = path.join(DATA_DIR, "posts");
+// localStorage 키 상수
+const SLOTS_KEY = "naver-cafe-macro-slots";
+const CAFES_KEY = "naver-cafe-macro-cafes";
+const POSTS_KEY_PREFIX = "naver-cafe-macro-posts-";
+const TASKS_KEY = "naver-cafe-macro-tasks";
 
-// 데이터 디렉토리 생성
+// Task 인터페이스 정의
+export interface Task {
+  id: string;
+  title: string;
+  prompt: string;
+  accountId: string;
+  cafeId: string;
+  templateId: string;
+  status: "pending" | "running" | "completed" | "failed";
+  scheduledTime?: string; // 시작 시간
+  delayBetweenTasks?: number; // 작업 간 딜레이 (분)
+  articleCount?: number; // 생성할 글감 수
+  menuId?: string; // 게시판 ID
+  createdAt: string;
+  updatedAt: string;
+  generatedContent?: string;
+}
+
+// 데이터 디렉토리 생성 (localStorage용 더미 함수)
 export const ensureDataDirectories = () => {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(POSTS_DIR)) {
-    fs.mkdirSync(POSTS_DIR, { recursive: true });
-  }
+  // localStorage는 별도 디렉토리 생성이 필요 없음
+  return true;
 };
 
 // 슬롯 데이터 저장
 export const saveSlots = (slots: any[]) => {
-  ensureDataDirectories();
-  const data = {
-    lastUpdated: new Date().toISOString(),
-    slots: slots,
-  };
-  fs.writeFileSync(SLOTS_FILE, JSON.stringify(data, null, 2), "utf8");
+  try {
+    const data = {
+      lastUpdated: new Date().toISOString(),
+      slots: slots,
+    };
+    localStorage.setItem(SLOTS_KEY, JSON.stringify(data));
+  } catch (error) {
+    console.error("Error saving slots:", error);
+  }
 };
 
 // 슬롯 데이터 불러오기
 export const loadSlots = () => {
-  ensureDataDirectories();
-
-  if (!fs.existsSync(SLOTS_FILE)) {
-    return null;
-  }
-
   try {
-    const data = JSON.parse(fs.readFileSync(SLOTS_FILE, "utf8"));
+    const dataString = localStorage.getItem(SLOTS_KEY);
+    if (!dataString) {
+      return null;
+    }
+
+    const data = JSON.parse(dataString);
     const now = new Date();
 
     // 12시간(43200000ms) 이후 체크
@@ -58,33 +74,26 @@ export const loadSlots = () => {
 
 // 계정별 글 저장
 export const saveAccountPosts = (userId: string, posts: any[]) => {
-  ensureDataDirectories();
-  const accountDir = path.join(POSTS_DIR, userId);
-
-  if (!fs.existsSync(accountDir)) {
-    fs.mkdirSync(accountDir, { recursive: true });
+  try {
+    const data = {
+      lastUpdated: new Date().toISOString(),
+      posts: posts,
+    };
+    localStorage.setItem(`${POSTS_KEY_PREFIX}${userId}`, JSON.stringify(data));
+  } catch (error) {
+    console.error(`Error saving posts for ${userId}:`, error);
   }
-
-  const postsFile = path.join(accountDir, "posts.json");
-  const data = {
-    lastUpdated: new Date().toISOString(),
-    posts: posts,
-  };
-
-  fs.writeFileSync(postsFile, JSON.stringify(data, null, 2), "utf8");
 };
 
 // 계정별 글 불러오기
 export const loadAccountPosts = (userId: string) => {
-  ensureDataDirectories();
-  const postsFile = path.join(POSTS_DIR, userId, "posts.json");
-
-  if (!fs.existsSync(postsFile)) {
-    return [];
-  }
-
   try {
-    const data = JSON.parse(fs.readFileSync(postsFile, "utf8"));
+    const dataString = localStorage.getItem(`${POSTS_KEY_PREFIX}${userId}`);
+    if (!dataString) {
+      return [];
+    }
+
+    const data = JSON.parse(dataString);
     return data.posts || [];
   } catch (error) {
     console.error(`Error loading posts for ${userId}:`, error);
@@ -92,33 +101,169 @@ export const loadAccountPosts = (userId: string) => {
   }
 };
 
-// 계정별 글 개별 저장 (txt 파일)
+// 계정별 글 개별 저장 (localStorage에는 단일 항목으로 저장)
 export const savePostAsFile = (
   userId: string,
   postId: string,
   content: string
 ) => {
-  ensureDataDirectories();
-  const accountDir = path.join(POSTS_DIR, userId);
-
-  if (!fs.existsSync(accountDir)) {
-    fs.mkdirSync(accountDir, { recursive: true });
+  try {
+    const key = `${POSTS_KEY_PREFIX}${userId}-${postId}`;
+    localStorage.setItem(key, content);
+  } catch (error) {
+    console.error(`Error saving post file for ${userId}:`, error);
   }
-
-  const postFile = path.join(accountDir, `${postId}.txt`);
-  fs.writeFileSync(postFile, content, "utf8");
 };
 
 // 모든 계정 목록 가져오기
 export const getAllAccounts = () => {
-  ensureDataDirectories();
-
-  if (!fs.existsSync(POSTS_DIR)) {
+  try {
+    const accounts: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(POSTS_KEY_PREFIX)) {
+        const userId = key.replace(POSTS_KEY_PREFIX, "").split("-")[0];
+        if (userId && !accounts.includes(userId)) {
+          accounts.push(userId);
+        }
+      }
+    }
+    return accounts;
+  } catch (error) {
+    console.error("Error getting all accounts:", error);
     return [];
   }
+};
 
-  return fs
-    .readdirSync(POSTS_DIR, { withFileTypes: true })
-    .filter((dirent) => dirent.isDirectory())
-    .map((dirent) => dirent.name);
+// 카페 정보 저장
+export const saveCafeInfos = (cafeInfos: Record<string, any>) => {
+  try {
+    const data = {
+      lastUpdated: new Date().toISOString(),
+      cafeInfos: cafeInfos,
+    };
+    localStorage.setItem(CAFES_KEY, JSON.stringify(data));
+  } catch (error) {
+    console.error("Error saving cafe infos:", error);
+  }
+};
+
+// 카페 정보 불러오기
+export const loadCafeInfos = () => {
+  try {
+    const dataString = localStorage.getItem(CAFES_KEY);
+    if (!dataString) {
+      return {};
+    }
+
+    const data = JSON.parse(dataString);
+    return data.cafeInfos || {};
+  } catch (error) {
+    console.error("Error loading cafe infos:", error);
+    return {};
+  }
+};
+
+// 템플릿 저장
+export const saveTemplates = (userId: string, templates: any[]) => {
+  try {
+    const key = `naver-cafe-macro-templates-${userId}`;
+    const data = {
+      lastUpdated: new Date().toISOString(),
+      templates: templates,
+    };
+    localStorage.setItem(key, JSON.stringify(data));
+  } catch (error) {
+    console.error("Error saving templates:", error);
+  }
+};
+
+// 템플릿 불러오기
+export const loadTemplates = (userId: string) => {
+  try {
+    const key = `naver-cafe-macro-templates-${userId}`;
+    const dataString = localStorage.getItem(key);
+    if (!dataString) {
+      return [];
+    }
+
+    const data = JSON.parse(dataString);
+    return data.templates || [];
+  } catch (error) {
+    console.error("Error loading templates:", error);
+    return [];
+  }
+};
+
+// 개별 템플릿 추가
+export const addTemplate = (userId: string, template: any) => {
+  try {
+    const existingTemplates = loadTemplates(userId);
+    const updatedTemplates = [...existingTemplates, template];
+    saveTemplates(userId, updatedTemplates);
+  } catch (error) {
+    console.error("Error adding template:", error);
+  }
+};
+
+// Tasks 관리 함수들
+export const saveTasks = (tasks: Task[]) => {
+  try {
+    const data = {
+      lastUpdated: new Date().toISOString(),
+      tasks: tasks,
+    };
+    localStorage.setItem(TASKS_KEY, JSON.stringify(data));
+  } catch (error) {
+    console.error("Error saving tasks:", error);
+  }
+};
+
+export const loadTasks = (): Task[] => {
+  try {
+    const dataString = localStorage.getItem(TASKS_KEY);
+    if (!dataString) {
+      return [];
+    }
+
+    const data = JSON.parse(dataString);
+    return data.tasks || [];
+  } catch (error) {
+    console.error("Error loading tasks:", error);
+    return [];
+  }
+};
+
+export const addTask = (task: Task) => {
+  try {
+    const existingTasks = loadTasks();
+    const updatedTasks = [...existingTasks, task];
+    saveTasks(updatedTasks);
+  } catch (error) {
+    console.error("Error adding task:", error);
+  }
+};
+
+export const updateTask = (taskId: string, updates: Partial<Task>) => {
+  try {
+    const tasks = loadTasks();
+    const updatedTasks = tasks.map((task) =>
+      task.id === taskId
+        ? { ...task, ...updates, updatedAt: new Date().toISOString() }
+        : task
+    );
+    saveTasks(updatedTasks);
+  } catch (error) {
+    console.error("Error updating task:", error);
+  }
+};
+
+export const deleteTask = (taskId: string) => {
+  try {
+    const tasks = loadTasks();
+    const updatedTasks = tasks.filter((task) => task.id !== taskId);
+    saveTasks(updatedTasks);
+  } catch (error) {
+    console.error("Error deleting task:", error);
+  }
 };
