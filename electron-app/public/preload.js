@@ -1,7 +1,8 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
-  openNaverLogin: () => ipcRenderer.invoke("open-naver-login"),
+  openNaverLogin: (targetSlotId = 1) =>
+    ipcRenderer.invoke("open-naver-login", targetSlotId),
 
   // 세션 데이터 수신 리스너
   onSessionDataCaptured: (callback) => {
@@ -39,6 +40,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   loadAccountTemplates: (userId) =>
     ipcRenderer.invoke("load-account-templates", userId),
 
+  // 설정 저장
+  saveSettings: (settings) => ipcRenderer.invoke("save-settings", settings),
+
+  // 설정 불러오기
+  loadSettings: () => ipcRenderer.invoke("load-settings"),
+
   // OpenAI API 키 설정
   setOpenAIKey: (apiKey) => ipcRenderer.invoke("set-openai-key", apiKey),
 
@@ -60,6 +67,19 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 템플릿 캡처 알림 수신 리스너
   onTemplateCaptured: (callback) => {
     ipcRenderer.on("template-captured", (event, data) => callback(data));
+  },
+
+  // 에디터 윈도우 등록
+  registerEditorWindow: (windowInfo) =>
+    ipcRenderer.invoke("register-editor-window", windowInfo),
+
+  // 에디터 윈도우 닫기
+  closeEditorWindows: (userId) =>
+    ipcRenderer.invoke("close-editor-windows", userId),
+
+  // 에디터 윈도우 닫기 이벤트 수신 리스너
+  onCloseEditorWindows: (callback) => {
+    ipcRenderer.on("close-editor-windows", (event, data) => callback(data));
   },
 
   // 리스너 제거 (메모리 누수 방지)

@@ -361,6 +361,20 @@ const SmartEditorBox: React.FC = () => {
           // 새 창 참조 저장
           setOpenedWindow(newWindow);
 
+          // Electron에 윈도우 정보 등록
+          if (
+            window.electronAPI &&
+            "registerEditorWindow" in window.electronAPI
+          ) {
+            (window.electronAPI as any).registerEditorWindow({
+              userId: slotInfo.userId,
+              cafeId: cafeInfo.cafeId,
+              boardId: cafeInfo.boardId,
+              url: writeUrl,
+              timestamp: new Date().toISOString(),
+            });
+          }
+
           // 새 창이 닫혔을 때 상태 초기화
           const checkClosed = setInterval(() => {
             if (newWindow.closed) {
@@ -395,7 +409,10 @@ const SmartEditorBox: React.FC = () => {
   useEffect(() => {
     fetchLoggedInSlots();
     loadSavedTemplates();
+  }, [fetchLoggedInSlots, loadSavedTemplates]);
 
+  // 템플릿 캡처 이벤트 리스너 등록 (분리)
+  useEffect(() => {
     // 템플릿 캡처 알림 리스너 등록
     if (window.electronAPI && "onTemplateCaptured" in window.electronAPI) {
       const handleTemplateCaptured = (data: {
@@ -417,19 +434,22 @@ const SmartEditorBox: React.FC = () => {
           );
 
           // 템플릿 캡처 성공 시 열린 창 자동으로 닫기
-          if (openedWindow && !openedWindow.closed) {
-            console.log("템플릿 캡처 완료로 인해 창을 자동으로 닫습니다.");
-            openedWindow.close();
-            setOpenedWindow(null);
-            setIsEditorOpen(false);
+          setOpenedWindow((currentWindow) => {
+            if (currentWindow && !currentWindow.closed) {
+              console.log("템플릿 캡처 완료로 인해 창을 자동으로 닫습니다.");
+              currentWindow.close();
+              setIsEditorOpen(false);
 
-            // 성공 메시지에 자동 종료 알림 추가
-            setMessage(
-              `✅ 템플릿이 저장되어 에디터 창을 자동으로 닫았습니다! 사용자: ${
-                data.userId
-              }, 카페: ${data.cafeId || "알 수 없음"}`
-            );
-          }
+              // 성공 메시지에 자동 종료 알림 추가
+              setMessage(
+                `✅ 템플릿이 저장되어 에디터 창을 자동으로 닫았습니다! 사용자: ${
+                  data.userId
+                }, 카페: ${data.cafeId || "알 수 없음"}`
+              );
+              return null;
+            }
+            return currentWindow;
+          });
         } else {
           setMessage(`❌ 템플릿 저장 실패: ${data.error || "알 수 없는 오류"}`);
         }
@@ -441,15 +461,57 @@ const SmartEditorBox: React.FC = () => {
       };
 
       (window.electronAPI as any).onTemplateCaptured(handleTemplateCaptured);
-
-      // 컴포넌트 언마운트 시 리스너 제거
-      return () => {
-        if (window.electronAPI && "removeAllListeners" in window.electronAPI) {
-          (window.electronAPI as any).removeAllListeners("template-captured");
-        }
-      };
     }
-  }, [fetchLoggedInSlots, loadSavedTemplates, openedWindow]);
+
+    // 에디터 윈도우 닫기 이벤트 리스너 등록
+    if (window.electronAPI && "onCloseEditorWindows" in window.electronAPI) {
+      const handleCloseEditorWindows = (data: {
+        userId: string;
+        reason?: string;
+        timestamp: string;
+        templateId?: string;
+      }) => {
+        console.log("🔄 에디터 윈도우 닫기 이벤트 수신:", data);
+
+        // 현재 열린 창이 있다면 닫기
+        setOpenedWindow((currentWindow) => {
+          if (currentWindow && !currentWindow.closed) {
+            console.log("Electron 신호로 인해 에디터 창을 닫습니다.");
+            currentWindow.close();
+            setIsEditorOpen(false);
+
+            if (data.reason === "template-captured") {
+              setMessage(
+                `✅ 임시저장 완료로 에디터 창이 자동으로 닫혔습니다! (사용자: ${data.userId})`
+              );
+            } else {
+              setMessage("🔄 에디터 창이 닫혔습니다.");
+            }
+
+            // 5초 후 메시지 자동 제거
+            setTimeout(() => {
+              setMessage("");
+            }, 5000);
+
+            return null;
+          }
+          return currentWindow;
+        });
+      };
+
+      (window.electronAPI as any).onCloseEditorWindows(
+        handleCloseEditorWindows
+      );
+    }
+
+    // 컴포넌트 언마운트 시 리스너 제거
+    return () => {
+      if (window.electronAPI && "removeAllListeners" in window.electronAPI) {
+        (window.electronAPI as any).removeAllListeners("template-captured");
+        (window.electronAPI as any).removeAllListeners("close-editor-windows");
+      }
+    };
+  }, []); // 의존성 배열을 빈 배열로 변경하여 한 번만 등록
 
   // 스타일
   const containerStyle: React.CSSProperties = {

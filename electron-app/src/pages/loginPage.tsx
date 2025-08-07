@@ -21,7 +21,7 @@ interface LoginSlot {
 declare global {
   interface Window {
     electronAPI?: {
-      openNaverLogin: () => Promise<any>;
+      openNaverLogin: (targetSlotId?: number) => Promise<any>;
       onSessionDataCaptured: (callback: (data: any) => void) => void;
       onSessionCaptureError: (callback: (error: string) => void) => void;
       onLoginWindowClosed: (callback: () => void) => void;
@@ -40,6 +40,10 @@ declare global {
 const LoginPage: React.FC = () => {
   const [message, setMessage] = useState<string>("");
   const [currentLoginSlot, setCurrentLoginSlot] = useState<number | null>(null);
+
+  // 사용자 ID 직접 입력 상태
+  const [editingUserId, setEditingUserId] = useState<number | null>(null);
+  const [tempUserId, setTempUserId] = useState<string>("");
 
   // 5개 로그인 슬롯 상태
   const [loginSlots, setLoginSlots] = useState<LoginSlot[]>(() =>
@@ -138,9 +142,67 @@ const LoginPage: React.FC = () => {
         // 세션 검증
         const hasValidSession = validateSessionData(data);
         if (hasValidSession && currentLoginSlot !== null) {
-          // 🔍 캡처된 실제 사용자 ID 사용 (request에서 추출한 값)
-          const userId = data.userId || "Unknown User";
-          console.log("👤 사용된 사용자 ID (request에서 추출):", userId);
+          // 🔍 사용자 ID 추출 (여러 방법 시도)
+          let userId = data.userId;
+
+          // 1차: 전달받은 userId 검증
+          if (
+            !userId ||
+            userId === "Unknown User" ||
+            userId.startsWith("user_")
+          ) {
+            console.log(
+              "🔍 전달받은 userId가 유효하지 않음. 대체 방법 시도..."
+            );
+
+            // 2차: 쿠키에서 추출 시도
+            const naverCookies = data.cookies;
+            if (naverCookies["NID_SES"] || naverCookies["NID_AUT"]) {
+              // 쿠키값에서 사용자 ID 패턴 찾기
+              const cookieString = JSON.stringify(naverCookies);
+              const userIdMatch = cookieString.match(/[a-zA-Z0-9]{4,20}/g);
+              if (userIdMatch) {
+                const possibleId = userIdMatch.find(
+                  (id) =>
+                    id.length >= 4 &&
+                    id.length <= 20 &&
+                    !/^[0-9]+$/.test(id) && // 순수 숫자는 제외
+                    /^[a-zA-Z]/.test(id) // 영문자로 시작
+                );
+                if (possibleId) {
+                  userId = possibleId;
+                  console.log("🍪 쿠키에서 추출된 사용자 ID:", userId);
+                }
+              }
+            }
+
+            // 3차: URL에서 추출 시도
+            if (
+              !userId ||
+              userId === "Unknown User" ||
+              userId.startsWith("user_")
+            ) {
+              const urlMatch = data.url.match(/[?&]u=([^&]+)/);
+              if (urlMatch) {
+                userId = decodeURIComponent(urlMatch[1]);
+                console.log("🌐 URL에서 추출된 사용자 ID:", userId);
+              }
+            }
+
+            // 4차: 최종 폴백 - 슬롯 기반 ID
+            if (
+              !userId ||
+              userId === "Unknown User" ||
+              userId.startsWith("user_")
+            ) {
+              userId = `슬롯${currentLoginSlot}_${Date.now()
+                .toString()
+                .slice(-6)}`;
+              console.log("⚠️ 대체 ID 생성:", userId);
+            }
+          }
+
+          console.log("👤 최종 사용자 ID:", userId);
 
           // 로그인 슬롯 업데이트
           const updatedSlot = {
@@ -231,7 +293,7 @@ const LoginPage: React.FC = () => {
   const handleOpenNaverLogin = async (slotId: number) => {
     try {
       setCurrentLoginSlot(slotId);
-      const result = await window.electronAPI?.openNaverLogin();
+      const result = await window.electronAPI?.openNaverLogin(slotId);
       console.log("Login window result:", result);
       setMessage(
         `🔓 슬롯 ${slotId} 네이버 로그인 창이 열렸습니다. 로그인을 완료해주세요.`
@@ -305,6 +367,61 @@ const LoginPage: React.FC = () => {
     }
 
     setMessage("🔄 모든 슬롯이 초기화되었습니다.");
+  };
+
+  // 사용자 ID 편집 시작
+  const handleStartEditUserId = (slotId: number, currentUserId: string) => {
+    setEditingUserId(slotId);
+    setTempUserId(currentUserId || "");
+  };
+
+  // 사용자 ID 편집 취소
+  const handleCancelEditUserId = () => {
+    setEditingUserId(null);
+    setTempUserId("");
+  };
+
+  // 사용자 ID 업데이트
+  const handleUpdateUserId = async () => {
+    if (editingUserId === null) return;
+
+    const newUserId = tempUserId.trim();
+    if (!newUserId) {
+      alert("사용자 ID를 입력해주세요.");
+      return;
+    }
+
+    // 상태 업데이트
+    setLoginSlots((prev) =>
+      prev.map((slot) =>
+        slot.id === editingUserId ? { ...slot, userId: newUserId } : slot
+      )
+    );
+
+    // Electron에 업데이트된 슬롯 저장
+    try {
+      const updatedSlot = loginSlots.find((slot) => slot.id === editingUserId);
+      if (updatedSlot) {
+        await window.electronAPI?.updateSlot({
+          id: editingUserId,
+          userId: newUserId,
+          isLoggedIn: updatedSlot.isLoggedIn,
+          timestamp: updatedSlot.timestamp || new Date().toISOString(),
+          sessionData: updatedSlot.sessionData,
+        });
+        console.log(
+          `💾 슬롯 ${editingUserId} 사용자 ID 업데이트 완료: ${newUserId}`
+        );
+      }
+    } catch (error) {
+      console.error("사용자 ID 업데이트 저장 오류:", error);
+    }
+
+    setMessage(
+      `✅ 슬롯 ${editingUserId}의 사용자 ID가 "${newUserId}"로 업데이트되었습니다.`
+    );
+    setEditingUserId(null);
+    setTempUserId("");
   };
 
   return (
@@ -401,9 +518,90 @@ const LoginPage: React.FC = () => {
                   </div>
                   <div>
                     <strong>사용자 ID:</strong>
-                    <span style={{ marginLeft: "8px", color: "#007bff" }}>
-                      {slot.userId || "N/A"}
-                    </span>
+                    {editingUserId === slot.id ? (
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "5px",
+                          marginTop: "5px",
+                        }}
+                      >
+                        <input
+                          type="text"
+                          value={tempUserId}
+                          onChange={(e) => setTempUserId(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              handleUpdateUserId();
+                            } else if (e.key === "Escape") {
+                              handleCancelEditUserId();
+                            }
+                          }}
+                          style={{
+                            padding: "4px 8px",
+                            border: "1px solid #007bff",
+                            borderRadius: "3px",
+                            fontSize: "12px",
+                            width: "120px",
+                          }}
+                          placeholder="사용자 ID 입력"
+                          autoFocus
+                        />
+                        <button
+                          onClick={handleUpdateUserId}
+                          style={{
+                            padding: "4px 8px",
+                            backgroundColor: "#28a745",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "3px",
+                            cursor: "pointer",
+                            fontSize: "11px",
+                          }}
+                        >
+                          ✓
+                        </button>
+                        <button
+                          onClick={handleCancelEditUserId}
+                          style={{
+                            padding: "4px 8px",
+                            backgroundColor: "#dc3545",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "3px",
+                            cursor: "pointer",
+                            fontSize: "11px",
+                          }}
+                        >
+                          ✗
+                        </button>
+                      </div>
+                    ) : (
+                      <span
+                        style={{
+                          marginLeft: "8px",
+                          color: "#007bff",
+                          cursor: "pointer",
+                          textDecoration: "underline",
+                          userSelect: "none",
+                        }}
+                        onClick={() =>
+                          handleStartEditUserId(slot.id, slot.userId)
+                        }
+                        title="클릭하여 직접 입력"
+                      >
+                        {slot.userId === "아이디를 직접 입력하세요" ? (
+                          <span
+                            style={{ color: "#6c757d", fontStyle: "italic" }}
+                          >
+                            {slot.userId}
+                          </span>
+                        ) : (
+                          slot.userId || "N/A"
+                        )}
+                      </span>
+                    )}
                   </div>
                   <div>
                     <strong>세션 키 개수:</strong>

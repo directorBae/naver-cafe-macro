@@ -191,7 +191,8 @@ const TasksPage: React.FC = () => {
         scheduledTime: task.scheduledTime,
         articleCount: task.articleCount,
       });
-      alert("시작 시간과 글감 수를 설정해주세요.");
+      // alert를 로그로 변경: 자동화 진행에 방해되지 않도록 함
+      console.error("❌ 시작 시간과 글감 수를 설정해주세요.");
       return;
     }
 
@@ -234,8 +235,9 @@ const TasksPage: React.FC = () => {
           console.log("⏰ 예약된 시간이 되었습니다. 자동화 실행 시작!");
           executeAutomation(task);
         }, waitTime);
-        alert(
-          `작업 "${task.title}"이 예약되었습니다. ${new Date(
+        // alert를 로그로 변경: 사용자 개입 없이 자동화가 진행되도록 함
+        console.log(
+          `📅 작업 "${task.title}"이 예약되었습니다. ${new Date(
             task.scheduledTime
           ).toLocaleString()}에 시작됩니다.`
         );
@@ -251,7 +253,8 @@ const TasksPage: React.FC = () => {
         updatedAt: new Date().toISOString(),
       });
       loadTasksFromStorage();
-      alert("자동화 시작에 실패했습니다: " + error);
+      // alert를 로그로 변경: 자동화 진행에 방해되지 않도록 함
+      console.error("❌ 자동화 시작에 실패했습니다:", error);
     }
   };
 
@@ -268,7 +271,7 @@ const TasksPage: React.FC = () => {
         delayBetweenTasks: task.delayBetweenTasks,
       });
 
-      // 슬롯에서 세션 정보 가져오기
+      // 슬롯에서 세션 정보 가져오기 - 향상된 매칭 로직
       console.log(
         "🔍 슬롯 검색 중... 로그인된 슬롯:",
         loggedInSlots.map((s) => ({
@@ -278,9 +281,31 @@ const TasksPage: React.FC = () => {
         }))
       );
 
-      const slot = loggedInSlots.find((slot) => slot.userId === task.accountId);
+      // 1차: 정확한 사용자 ID 매칭
+      let slot = loggedInSlots.find(
+        (slot) => slot.userId === task.accountId && slot.isLoggedIn
+      );
+
+      // 2차: 슬롯 ID로 매칭 시도 (task.accountId가 "slot-1" 형태인 경우)
+      if (!slot && task.accountId.startsWith("slot-")) {
+        const slotId = parseInt(task.accountId.replace("slot-", ""));
+        slot = loggedInSlots.find((s) => s.id === slotId && s.isLoggedIn);
+        console.log(`🔄 슬롯 ID ${slotId}로 재검색:`, slot ? "찾음" : "없음");
+      }
+
+      // 3차: 모든 로그인된 슬롯에서 사용자 ID 부분 매칭
+      if (!slot) {
+        slot = loggedInSlots.find(
+          (s) =>
+            s.isLoggedIn &&
+            (s.userId.includes(task.accountId) ||
+              task.accountId.includes(s.userId))
+        );
+        console.log("🔄 부분 매칭으로 재검색:", slot ? "찾음" : "없음");
+      }
+
       console.log(
-        "🎯 찾은 슬롯:",
+        "🎯 최종 선택된 슬롯:",
         slot
           ? {
               id: slot.id,
@@ -295,40 +320,91 @@ const TasksPage: React.FC = () => {
                 ? Object.keys(slot.sessionData.cookies)
                 : [],
             }
-          : "슬롯을 찾을 수 없음"
+          : "❌ 슬롯을 찾을 수 없음"
       );
 
       if (!slot || !slot.isLoggedIn) {
-        throw new Error(`계정 ${task.accountId}의 세션을 찾을 수 없습니다.`);
+        throw new Error(
+          `계정 ${task.accountId}의 로그인된 세션을 찾을 수 없습니다. 먼저 해당 계정으로 로그인해주세요.`
+        );
       }
 
-      // 세션 데이터에서 쿠키 추출
+      // 세션 데이터에서 쿠키 추출 - 향상된 추출 로직
       let sessionCookies: Record<string, string> = {};
-      if (slot.sessionData && slot.sessionData.cookies) {
+
+      // 1순위: slot.sessionData.cookies
+      if (
+        slot.sessionData?.cookies &&
+        Object.keys(slot.sessionData.cookies).length > 0
+      ) {
         sessionCookies = slot.sessionData.cookies;
         console.log("🍪 세션 데이터에서 쿠키 추출:", {
+          source: "sessionData.cookies",
           cookieCount: Object.keys(sessionCookies).length,
           cookieKeys: Object.keys(sessionCookies),
           hasNID_AUT: !!sessionCookies["NID_AUT"],
           hasNID_SES: !!sessionCookies["NID_SES"],
         });
-      } else if (slot.cookies) {
+      }
+      // 2순위: slot.cookies (직접)
+      else if (slot.cookies && Object.keys(slot.cookies).length > 0) {
         sessionCookies = slot.cookies;
         console.log("🍪 슬롯 직접 쿠키 사용:", {
+          source: "slot.cookies",
           cookieCount: Object.keys(sessionCookies).length,
           cookieKeys: Object.keys(sessionCookies),
+          hasNID_AUT: !!sessionCookies["NID_AUT"],
+          hasNID_SES: !!sessionCookies["NID_SES"],
         });
-      } else {
-        console.error("❌ 사용할 수 있는 쿠키가 없습니다!");
+      }
+      // 오류: 쿠키 없음
+      else {
+        console.error("❌ 사용할 수 있는 쿠키가 없습니다!", {
+          slotId: slot.id,
+          userId: slot.userId,
+          hasSessionData: !!slot.sessionData,
+          hasDirectCookies: !!slot.cookies,
+          sessionDataStructure: slot.sessionData
+            ? Object.keys(slot.sessionData)
+            : [],
+        });
+        throw new Error(
+          `계정 ${task.accountId} (슬롯 ${slot.id})의 세션 쿠키가 없습니다. 다시 로그인해주세요.`
+        );
       }
 
-      // 템플릿 정보 가져오기
-      console.log("📋 템플릿 로드 중...");
+      // 필수 쿠키 검증
+      const requiredCookies = ["NID_AUT", "NID_SES"];
+      const missingCookies = requiredCookies.filter(
+        (cookie) => !sessionCookies[cookie]
+      );
+      if (missingCookies.length > 0) {
+        console.warn("⚠️ 필수 쿠키 누락:", missingCookies);
+        throw new Error(
+          `필수 네이버 쿠키가 누락되었습니다: ${missingCookies.join(
+            ", "
+          )}. 다시 로그인해주세요.`
+        );
+      }
+
+      console.log("✅ 세션 쿠키 검증 완료:", {
+        accountId: task.accountId,
+        slotId: slot.id,
+        slotUserId: slot.userId,
+        cookieCount: Object.keys(sessionCookies).length,
+        hasAllRequiredCookies: requiredCookies.every(
+          (cookie) => sessionCookies[cookie]
+        ),
+      });
+
+      // 템플릿 정보 가져오기 - 정확한 사용자 ID 사용
+      console.log(`📋 템플릿 로드 중... (사용자: ${slot.userId})`);
       const templateData = await (
         window.electronAPI as any
-      )?.loadAccountTemplates(task.accountId);
+      )?.loadAccountTemplates(slot.userId); // task.accountId 대신 slot.userId 사용
 
       console.log("📋 로드된 템플릿 데이터:", {
+        requestedUserId: slot.userId,
         templateCount: templateData?.length || 0,
         templateIds: templateData?.map((t: any) => t.id) || [],
       });
@@ -340,6 +416,7 @@ const TasksPage: React.FC = () => {
           ? {
               id: template.id,
               timestamp: template.timestamp,
+              userId: template.userId,
               hasRequestBody: !!template.requestBody,
             }
           : "템플릿을 찾을 수 없음"
@@ -347,7 +424,7 @@ const TasksPage: React.FC = () => {
 
       if (!template) {
         throw new Error(
-          `템플릿을 찾을 수 없습니다. 템플릿 ID: ${task.templateId}`
+          `템플릿을 찾을 수 없습니다. 템플릿 ID: ${task.templateId}, 사용자: ${slot.userId}`
         );
       }
 
@@ -402,7 +479,8 @@ const TasksPage: React.FC = () => {
       loadTasksFromStorage();
 
       console.log("✅ 자동화 작업 완료:", task.title);
-      alert(`작업 "${task.title}"이 성공적으로 완료되었습니다.`);
+      // alert 제거: 로그로 대체하여 사용자 개입 없이 진행되도록 함
+      console.log(`✅ 작업 "${task.title}"이 성공적으로 완료되었습니다.`);
     } catch (error) {
       console.error("❌ 자동화 실행 실패:", error);
       console.error(
@@ -418,7 +496,8 @@ const TasksPage: React.FC = () => {
 
       const errorMessage =
         error instanceof Error ? error.message : String(error);
-      alert(`자동화 실행에 실패했습니다:\n${errorMessage}`);
+      // alert를 로그로 변경: 사용자 개입 없이 자동화가 진행되도록 함
+      console.error(`❌ 자동화 실행에 실패했습니다: ${errorMessage}`);
     }
   };
 
@@ -515,7 +594,8 @@ const TasksPage: React.FC = () => {
     try {
       console.log("🚀 네이버 카페 API 호출 시작:", {
         taskId: task.id,
-        accountId: task.accountId,
+        taskAccountId: task.accountId,
+        actualSlotUserId: slot.userId,
         cafeId: task.cafeId,
         menuId: task.menuId,
         templateId: task.templateId,
@@ -531,16 +611,39 @@ const TasksPage: React.FC = () => {
             sessionCookies["NID_AUT"] && sessionCookies["NID_SES"]
           ),
           cookieKeys: Object.keys(sessionCookies),
+          NID_AUT_preview: sessionCookies["NID_AUT"]?.substring(0, 20) + "...",
+          NID_SES_preview: sessionCookies["NID_SES"]?.substring(0, 20) + "...",
         },
       });
+
+      // 세션 매칭 검증
+      if (
+        task.accountId !== slot.userId &&
+        !task.accountId.startsWith("slot-")
+      ) {
+        console.warn("⚠️ 작업 계정 ID와 슬롯 사용자 ID가 다릅니다:", {
+          taskAccountId: task.accountId,
+          slotUserId: slot.userId,
+          slotId: slot.id,
+        });
+      }
 
       // 템플릿에서 상품 정보 파싱
       const templateBody = JSON.parse(template.requestBody);
       console.log("📝 템플릿 파싱 완료:", {
+        templateUserId: template.userId,
         hasPersonalTradeDirect: !!templateBody.personalTradeDirect,
         subject: templateBody.personalTradeDirect?.subject,
         templateKeys: Object.keys(templateBody),
       });
+
+      // 템플릿 소유자 검증
+      if (template.userId !== slot.userId) {
+        console.warn("⚠️ 템플릿 소유자와 슬롯 사용자가 다릅니다:", {
+          templateOwner: template.userId,
+          slotUser: slot.userId,
+        });
+      }
 
       // API 요청 구성
       const apiUrl = `https://apis.naver.com/cafe-web/cafe-editor-api/v2.0/cafes/${task.cafeId}/menus/${task.menuId}/articles`;
@@ -566,33 +669,20 @@ const TasksPage: React.FC = () => {
         ),
       };
 
-      console.log("📤 API 요청 URL:", apiUrl);
-      console.log("📤 API 요청 Body:", JSON.stringify(requestBody, null, 2));
-
-      // 더 완전한 헤더 설정
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "X-Requested-With": "XMLHttpRequest",
-      };
-
-      // 쿠키 설정
-      if (Object.keys(sessionCookies).length > 0) {
-        const cookieString = Object.entries(sessionCookies)
-          .map(([name, value]) => `${name}=${value}`)
-          .join("; ");
-        headers["Cookie"] = cookieString;
-        console.log("� 쿠키 설정됨:", cookieString.substring(0, 100) + "...");
-      } else {
-        console.warn("⚠️ 쿠키가 없습니다!");
-      }
+      console.log("📤 API 요청 구성 완료:", {
+        url: apiUrl,
+        bodySize: JSON.stringify(requestBody).length,
+        subject: requestBody.article.subject,
+        cafeId: requestBody.article.cafeId,
+        menuId: requestBody.article.menuId,
+      });
 
       console.log("📤 Electron으로 API 호출 요청:", {
-        url: apiUrl,
-        bodyLength: JSON.stringify(requestBody).length,
-        cookieCount: Object.keys(sessionCookies).length,
+        실제사용자: slot.userId,
+        작업계정: task.accountId,
+        슬롯ID: slot.id,
+        쿠키개수: Object.keys(sessionCookies).length,
+        URL: apiUrl,
       });
 
       // Electron을 통해 API 호출
@@ -602,16 +692,29 @@ const TasksPage: React.FC = () => {
         cookies: sessionCookies,
       });
 
-      console.log("📥 Electron API 호출 결과:", result);
+      console.log("📥 Electron API 호출 결과:", {
+        success: result.success,
+        hasData: !!result.data,
+        error: result.error,
+      });
 
       if (!result.success) {
         throw new Error(`Electron API 호출 실패: ${result.error}`);
       }
 
-      console.log("✅ 게시글 업로드 성공:", result.data);
+      console.log("✅ 게시글 업로드 성공:", {
+        사용자: slot.userId,
+        슬롯: slot.id,
+        결과: result.data,
+      });
       return result.data;
     } catch (error) {
-      console.error("❌ 네이버 카페 API 호출 실패:", error);
+      console.error("❌ 네이버 카페 API 호출 실패:", {
+        error: error,
+        사용자: slot?.userId,
+        슬롯: slot?.id,
+        작업계정: task.accountId,
+      });
       console.error(
         "❌ 오류 스택:",
         error instanceof Error ? error.stack : "스택 없음"

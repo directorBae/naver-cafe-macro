@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import SmartEditorBox from "../components/smartEditorBox";
 import { Task, addTask } from "../utils/dataStorage";
+import { isApiKeyConfigured, getApiKey } from "../utils/settingsStorage";
 
 interface Post {
   id: string;
@@ -41,7 +42,6 @@ interface ProductInfo {
 }
 
 const WritePage: React.FC = () => {
-  const [apiKey, setApiKey] = useState<string>("");
   const [isApiKeySet, setIsApiKeySet] = useState<boolean>(false);
   const [prompt, setPrompt] = useState<string>("");
   const [message, setMessage] = useState<string>("");
@@ -58,7 +58,7 @@ const WritePage: React.FC = () => {
     },
     []
   );
-  const [selectedAccount, setSelectedAccount] = useState<string>("");
+  const [selectedAccount, setSelectedAccount] = useState<string>(""); // 슬롯 ID 저장 (예: "slot-1")
 
   // 로그인된 슬롯 정보
   const [loggedInSlots, setLoggedInSlots] = useState<any[]>([]);
@@ -73,19 +73,36 @@ const WritePage: React.FC = () => {
       let filteredTemplates: Template[] = [];
 
       if (selectedAccount) {
-        // 선택된 계정만의 템플릿 로드
-        const slot = loggedInSlots.find((s) => s.userId === selectedAccount);
+        // 슬롯 ID로 실제 슬롯 찾기 (예: "slot-1" -> id: 1)
+        const slotId = selectedAccount.startsWith("slot-")
+          ? parseInt(selectedAccount.replace("slot-", ""))
+          : parseInt(selectedAccount);
+
+        const slot = loggedInSlots.find((s) => s.id === slotId);
         if (slot && slot.isLoggedIn) {
           try {
+            console.log(
+              `🔍 슬롯 ${slotId} (${slot.userId})의 템플릿 로드 시작...`
+            );
+
             const userTemplates = await (
               window.electronAPI as any
             )?.loadAccountTemplates(slot.userId);
             if (userTemplates && userTemplates.length > 0) {
               filteredTemplates = userTemplates;
             }
+
+            console.log(
+              `📄 슬롯 ${slotId}에서 ${filteredTemplates.length}개 템플릿 로드됨`
+            );
           } catch (error) {
-            console.error(`${selectedAccount} 템플릿 로드 실패:`, error);
+            console.error(
+              `슬롯 ${slotId} (${slot.userId}) 템플릿 로드 실패:`,
+              error
+            );
           }
+        } else {
+          console.error(`❌ 슬롯 ${slotId}를 찾을 수 없거나 로그인되지 않음`);
         }
       } else {
         // 계정이 선택되지 않은 경우 빈 배열로 설정
@@ -93,10 +110,9 @@ const WritePage: React.FC = () => {
       }
 
       setTemplates(filteredTemplates);
+      const slotInfo = selectedAccount ? `슬롯 ${selectedAccount}` : "전체";
       console.log(
-        `${selectedAccount ? `계정 ${selectedAccount}의` : "전체"} ${
-          filteredTemplates.length
-        }개의 템플릿이 로드되었습니다.`
+        `${slotInfo}의 ${filteredTemplates.length}개의 템플릿이 로드되었습니다.`
       );
     } catch (error) {
       console.error("템플릿 불러오기 오류:", error);
@@ -105,28 +121,37 @@ const WritePage: React.FC = () => {
 
   const checkApiKey = useCallback(async () => {
     try {
-      // 환경변수에서 API 키 확인
-      const envApiKey = await window.electronAPI?.getEnvVariable(
-        "OPENAI_API_KEY"
-      );
+      // 이미 API 키가 설정되어 있으면 스킵
+      if (isApiKeySet) {
+        return;
+      }
 
-      if (envApiKey && envApiKey !== "your_openai_api_key_here") {
-        setApiKey(envApiKey);
+      // 설정 파일에서 API 키 확인
+      const hasApiKey = await isApiKeyConfigured();
+
+      if (hasApiKey) {
+        const apiKey = await getApiKey();
         setIsApiKeySet(true);
 
         // Electron 메인 프로세스에 API 키 전달
         if (window.electronAPI?.setOpenAIKey) {
-          await window.electronAPI.setOpenAIKey(envApiKey);
+          await window.electronAPI.setOpenAIKey(apiKey);
         }
 
-        setMessage("✅ 환경변수에서 API 키를 불러왔습니다.");
+        setMessage("✅ 설정에서 API 키를 불러왔습니다.");
+
+        // 메시지 3초 후 제거
+        setTimeout(() => setMessage(""), 3000);
       } else {
-        setMessage("⚠️ API 키를 입력해주세요.");
+        setIsApiKeySet(false);
+        setMessage("⚠️ 설정 페이지에서 API 키를 입력해주세요.");
       }
     } catch (error) {
-      setMessage("⚠️ API 키를 입력해주세요.");
+      console.error("API 키 확인 오류:", error);
+      setIsApiKeySet(false);
+      setMessage("⚠️ 설정 페이지에서 API 키를 입력해주세요.");
     }
-  }, []);
+  }, [isApiKeySet]);
 
   const loadLoggedInSlots = useCallback(async () => {
     try {
@@ -212,11 +237,12 @@ const WritePage: React.FC = () => {
           setMessage(
             `✅ 새로운 상품이 캡처되었습니다! (사용자: ${data.userId})`
           );
+
+          // 템플릿 목록 즉시 다시 로드
           setTimeout(() => {
-            // loadTemplates를 직접 호출하지 말고 상태를 통해 간접 트리거
-            setLoggedInSlots((prev) => [...prev]); // 강제 리렌더링으로 템플릿 로드 트리거
+            loadTemplates();
             setMessage(""); // 메시지 제거
-          }, 2000); // 파일 저장 완료를 위한 약간의 딜레이
+          }, 1000); // 파일 저장 완료를 위한 약간의 딜레이
         }
       };
 
@@ -238,7 +264,7 @@ const WritePage: React.FC = () => {
         }
       };
     }
-  }, [checkApiKey, loadLoggedInSlots]); // 안정화된 함수들을 의존성으로 추가
+  }, [checkApiKey, loadLoggedInSlots, loadTemplates]); // 안정화된 함수들을 의존성으로 추가
 
   // 로그인된 슬롯이 변경되면 템플릿 불러오기
   useEffect(() => {
@@ -246,26 +272,6 @@ const WritePage: React.FC = () => {
       loadTemplates();
     }
   }, [loggedInSlots, loadTemplates]);
-
-  const handleApiKeySubmit = useCallback(async () => {
-    if (!apiKey.trim()) {
-      setMessage("❌ API 키를 입력해주세요.");
-      return;
-    }
-
-    try {
-      // Electron 메인 프로세스에 API 키 전달
-      if (window.electronAPI?.setOpenAIKey) {
-        await window.electronAPI.setOpenAIKey(apiKey);
-      }
-
-      setIsApiKeySet(true);
-      setMessage("✅ API 키가 설정되었습니다.");
-    } catch (error) {
-      console.error("API 키 설정 오류:", error);
-      setMessage("❌ API 키 설정 중 오류가 발생했습니다.");
-    }
-  }, [apiKey]);
 
   // 템플릿에서 상품 정보 추출
   const parseProductInfo = (template: Template): ProductInfo | null => {
@@ -314,6 +320,17 @@ const WritePage: React.FC = () => {
     }
 
     try {
+      // 선택된 슬롯에서 실제 사용자 ID 가져오기
+      const slotId = selectedAccount.startsWith("slot-")
+        ? parseInt(selectedAccount.replace("slot-", ""))
+        : parseInt(selectedAccount);
+
+      const selectedSlot = loggedInSlots.find((s) => s.id === slotId);
+      if (!selectedSlot) {
+        setMessage("❌ 선택된 슬롯을 찾을 수 없습니다.");
+        return;
+      }
+
       const selectedTemplateData = templates.find(
         (t) => t.id === selectedTemplate
       );
@@ -332,7 +349,7 @@ const WritePage: React.FC = () => {
         id: `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         title: `${productInfo.title} - ${prompt}`,
         prompt: prompt,
-        accountId: selectedAccount,
+        accountId: selectedSlot.userId, // 실제 사용자 ID 사용
         cafeId: selectedTemplateData.cafeId || "",
         templateId: selectedTemplate,
         status: "pending",
@@ -341,7 +358,9 @@ const WritePage: React.FC = () => {
       };
 
       addTask(newTask);
-      setMessage(`✅ 작업이 생성되었습니다: ${newTask.title}`);
+      setMessage(
+        `✅ 작업이 생성되었습니다: ${newTask.title} (슬롯 ${slotId}: ${selectedSlot.userId})`
+      );
 
       // 폼 초기화
       setPrompt("");
@@ -407,7 +426,7 @@ const WritePage: React.FC = () => {
             {loggedInSlots
               .filter((slot) => slot.isLoggedIn)
               .map((slot) => (
-                <option key={slot.id} value={slot.userId}>
+                <option key={slot.id} value={`slot-${slot.id}`}>
                   🔐 슬롯 {slot.id}: {slot.userId}
                 </option>
               ))}
@@ -424,7 +443,16 @@ const WritePage: React.FC = () => {
             }}
           >
             <span style={{ color: "#28a745", fontWeight: "bold" }}>
-              ✅ 선택된 계정: {selectedAccount}
+              ✅ 선택된 계정:{" "}
+              {(() => {
+                const slotId = selectedAccount.startsWith("slot-")
+                  ? parseInt(selectedAccount.replace("slot-", ""))
+                  : parseInt(selectedAccount);
+                const slot = loggedInSlots.find((s) => s.id === slotId);
+                return slot
+                  ? `슬롯 ${slot.id} (${slot.userId})`
+                  : selectedAccount;
+              })()}
             </span>
           </div>
         )}
@@ -604,7 +632,7 @@ const WritePage: React.FC = () => {
         </div>
       )}
 
-      {/* API 키 설정 섹션 */}
+      {/* API 키 설정 상태 */}
       <div
         style={{
           marginBottom: "20px",
@@ -616,36 +644,18 @@ const WritePage: React.FC = () => {
       >
         <h3>🔑 OpenAI API 키 설정</h3>
         {!isApiKeySet ? (
-          <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="OpenAI API 키를 입력하세요"
-              style={{
-                flex: 1,
-                padding: "8px",
-                border: "1px solid #ddd",
-                borderRadius: "4px",
-              }}
-            />
-            <button
-              onClick={handleApiKeySubmit}
-              style={{
-                padding: "8px 15px",
-                backgroundColor: "#007bff",
-                color: "white",
-                border: "none",
-                borderRadius: "4px",
-                cursor: "pointer",
-              }}
-            >
-              설정
-            </button>
+          <div>
+            <p style={{ color: "#dc3545", marginBottom: "10px" }}>
+              ❌ API 키가 설정되지 않았습니다.
+            </p>
+            <p style={{ fontSize: "14px", color: "#666" }}>
+              글 생성 기능을 사용하려면 <strong>설정 페이지</strong>에서 OpenAI
+              API 키를 입력해주세요.
+            </p>
           </div>
         ) : (
           <div style={{ color: "#28a745", fontWeight: "bold" }}>
-            ✅ API 키가 설정되었습니다. (키: {apiKey.substring(0, 7)}***)
+            ✅ API 키가 설정되었습니다.
           </div>
         )}
       </div>
@@ -742,10 +752,10 @@ const WritePage: React.FC = () => {
           </h3>
           <p style={{ color: "#721c24", margin: "0" }}>
             {!selectedAccount && !isApiKeySet
-              ? "계정을 선택하고 API 키를 설정해주세요."
+              ? "계정을 선택하고 설정 페이지에서 API 키를 설정해주세요."
               : !selectedAccount
               ? "계정을 선택해주세요."
-              : "API 키를 설정해주세요."}
+              : "설정 페이지에서 API 키를 설정해주세요."}
           </p>
         </div>
       )}
