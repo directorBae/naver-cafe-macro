@@ -1,6 +1,7 @@
 const path = require("path");
 const { app, BrowserWindow, ipcMain, session } = require("electron");
 const fs = require("fs");
+const os = require("os");
 const dotenv = require("dotenv");
 const OpenAI = require("openai");
 
@@ -35,20 +36,69 @@ let activeEditorUser = null; // 현재 활성 에디터 사용자 ID 추적
 // 데이터 저장 경로 (프로덕션 환경 고려)
 const DATA_DIR = isDev
   ? path.join(__dirname, "..", "data")
-  : path.join(process.resourcesPath, "data");
+  : path.join(os.homedir(), "AppData", "Local", "naver-cafe-macro", "data");
 
 // ... 나머지 코드는 동일
 const SLOTS_FILE = path.join(DATA_DIR, "slots.json");
 const POSTS_DIR = path.join(DATA_DIR, "posts");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 
-// 데이터 디렉토리 생성
+// 데이터 디렉토리 생성 및 권한 확인
 const ensureDataDirectories = () => {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(POSTS_DIR)) {
-    fs.mkdirSync(POSTS_DIR, { recursive: true });
+  try {
+    console.log("📁 데이터 디렉토리 확인:", DATA_DIR);
+    console.log("🔍 환경 정보:");
+    console.log("  - app.isPackaged:", app.isPackaged);
+    console.log("  - NODE_ENV:", process.env.NODE_ENV);
+    console.log("  - isDev:", isDev);
+    console.log("  - __dirname:", __dirname);
+
+    // 메인 데이터 디렉토리 생성
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      console.log("✅ 데이터 디렉토리 생성 완료:", DATA_DIR);
+    }
+
+    // posts 디렉토리 생성
+    if (!fs.existsSync(POSTS_DIR)) {
+      fs.mkdirSync(POSTS_DIR, { recursive: true });
+      console.log("✅ posts 디렉토리 생성 완료:", POSTS_DIR);
+    }
+
+    // 쓰기 권한 테스트
+    const testFile = path.join(DATA_DIR, "test-write.tmp");
+    fs.writeFileSync(testFile, "test");
+    fs.unlinkSync(testFile);
+    console.log("✅ 쓰기 권한 확인 완료");
+
+    return true;
+  } catch (error) {
+    console.error("❌ 데이터 디렉토리 생성/권한 오류:", error);
+
+    // 폴백: 사용자 문서 폴더 사용
+    const fallbackDir = path.join(
+      os.homedir(),
+      "Documents",
+      "naver-cafe-macro"
+    );
+    console.log("🔄 폴백 디렉토리 시도:", fallbackDir);
+
+    try {
+      if (!fs.existsSync(fallbackDir)) {
+        fs.mkdirSync(fallbackDir, { recursive: true });
+      }
+
+      const fallbackPostsDir = path.join(fallbackDir, "posts");
+      if (!fs.existsSync(fallbackPostsDir)) {
+        fs.mkdirSync(fallbackPostsDir, { recursive: true });
+      }
+
+      console.log("✅ 폴백 디렉토리 사용:", fallbackDir);
+      return true;
+    } catch (fallbackError) {
+      console.error("❌ 폴백 디렉토리도 실패:", fallbackError);
+      return false;
+    }
   }
 };
 
@@ -1415,6 +1465,13 @@ const loadSlots = () => {
 };
 
 app.whenReady().then(() => {
+  // 데이터 디렉토리 생성 및 권한 확인
+  const success = ensureDataDirectories();
+  if (!success) {
+    console.error("❌ 데이터 디렉토리 초기화 실패");
+    // 에러 다이얼로그는 제거하고 로그만 남김
+  }
+
   createWindow();
   loadSlots(); // 앱 시작 시 슬롯 데이터 불러오기
 });

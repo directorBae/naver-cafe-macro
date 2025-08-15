@@ -1,6 +1,6 @@
 {
   "name": "naver-cafe-macro",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "네이버 카페 자동화 매크로",
   "homepage": "./",
   "private": true,
@@ -46,7 +46,7 @@
       "public/electron.js",
       "public/preload.js",
       "node_modules/**/*",
-      "data/**/*",
+      "!data/**/*",
       ".env"
     ],
     "win": {
